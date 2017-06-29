@@ -45,6 +45,8 @@ private[akka] object Mailbox {
   // mailbox debugging helper using println (see below)
   // since this is a compile-time constant, scalac will elide code behind if (Mailbox.debug) (RK checked with 2.9.1)
   final val debug = false // Deliberately without type ascription to make it a compile-time constant
+
+  private val mailboxCounter = new AtomicInteger
 }
 
 /**
@@ -244,6 +246,8 @@ private[akka] abstract class Mailbox(val messageQueue: MessageQueue)
       throw anything
   }
 
+  private val distribution = new Array[Int](100)
+
   /**
    * Process the messages in the mailbox
    */
@@ -260,6 +264,11 @@ private[akka] abstract class Mailbox(val messageQueue: MessageQueue)
         processAllSystemMessages()
         if ((left > 1) && ((dispatcher.isThroughputDeadlineTimeDefined == false) || (System.nanoTime - deadlineNs) < 0))
           processMailbox(left - 1, deadlineNs)
+        else {
+          distribution(dispatcher.throughput) = distribution(dispatcher.throughput) + 1
+        }
+      } else {
+        distribution(dispatcher.throughput - left) = distribution(dispatcher.throughput - left) + 1
       }
     }
 
@@ -315,6 +324,13 @@ private[akka] abstract class Mailbox(val messageQueue: MessageQueue)
    */
   protected[dispatch] def cleanUp(): Unit =
     if (actor ne null) { // actor is null for the deadLetterMailbox
+      val total = distribution.sum
+      val p = distribution.toVector.take(dispatcher.throughput + 1).map(_ * 100.0 / total).zipWithIndex.collect {
+        case (a, b) if a > 0.1 ⇒
+          f"$b -> ${a}%,.0f %%"
+      }
+      println(s"# distribution ${p.mkString(", ")}") // FIXME
+
       val dlm = actor.dispatcher.mailboxes.deadLetterMailbox
       var messageList = systemDrain(new LatestFirstSystemMessageList(NoMessage))
       while (messageList.nonEmpty) {
@@ -328,6 +344,8 @@ private[akka] abstract class Mailbox(val messageQueue: MessageQueue)
       if (messageQueue ne null) // needed for CallingThreadDispatcher, which never calls Mailbox.run()
         messageQueue.cleanUp(actor.self, actor.dispatcher.mailboxes.deadLetterMailbox.messageQueue)
     }
+
+  //override val hashCode: Int = mailboxCounter.incrementAndGet()
 }
 
 /**
