@@ -18,17 +18,18 @@ import org.openjdk.jmh.annotations._
 @Measurement(iterations = 10, time = 15, timeUnit = TimeUnit.SECONDS, batchSize = 1)
 class AffinityPoolComparativeBenchmark {
 
-  @Param(Array("1"))
+  @Param(Array("20"))
   var throughPut = 0
 
-  @Param(Array("affinity-dispatcher", "default-fj-dispatcher", "fixed-size-dispatcher"))
+  @Param(Array("pinned-affinity-dispatcher", "affinity-dispatcher", "fj-dispatcher"))
   var dispatcher = ""
 
   @Param(Array("SingleConsumerOnlyUnboundedMailbox")) //"default"
   var mailbox = ""
 
-  final val numThreads, numActors = 8
-  final val numMessagesPerActorPair = 2000000
+  final val numThreads = 6
+  final val numActors = 6
+  final val numMessagesPerActorPair = 4000000
   final val totalNumberOfMessages = numMessagesPerActorPair * (numActors / 2)
 
   implicit var system: ActorSystem = _
@@ -58,6 +59,17 @@ class AffinityPoolComparativeBenchmark {
           |       throughput = $throughPut
           |     }
           |
+          |     fj-dispatcher {
+          |       executor = "fork-join-executor"
+          |       fork-join-executor {
+          |         parallelism-min = $numThreads
+          |         parallelism-factor = 1.0
+          |         parallelism-max = $numThreads
+          |       }
+          |       throughput = $throughPut
+          |       mailbox-type = "akka.actor.ManyToOneArrayMailbox"
+          |     }
+          |
           |     fixed-size-dispatcher {
           |       executor = "thread-pool-executor"
           |       thread-pool-executor {
@@ -75,8 +87,21 @@ class AffinityPoolComparativeBenchmark {
           |         task-queue-size = 512
           |         idle-cpu-level = 5
           |         fair-work-distribution-threshold = ${Int.MaxValue}
-          |     }
+          |       }
+          |       mailbox-type = "akka.actor.ManyToOneArrayMailbox"
           |       throughput = $throughPut
+          |     }
+          |     pinned-affinity-dispatcher {
+          |       type = PinnedDispatcher
+          |       executor = "affinity-pool-executor"
+          |       affinity-pool-executor {
+          |         idle-cpu-level = 5
+          |         parallelism-min = 1
+          |         parallelism-max = 1
+          |         task-queue-size = 4
+          |       }
+          |       throughput = $throughPut
+          |       mailbox-type = "akka.actor.ManyToOneArrayMailbox"
           |     }
           |     $mailboxConf
           |   }

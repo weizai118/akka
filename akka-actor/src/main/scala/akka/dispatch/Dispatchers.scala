@@ -12,6 +12,7 @@ import akka.event.EventStream
 import akka.ConfigurationException
 import akka.util.Helpers.ConfigOps
 import scala.concurrent.ExecutionContext
+import akka.dispatch.affinity.AffinityPoolConfigurator
 
 /**
  * DispatcherPrerequisites represents useful contextual pieces when constructing a MessageDispatcher
@@ -284,23 +285,35 @@ class BalancingDispatcherConfigurator(_config: Config, _prerequisites: Dispatche
 class PinnedDispatcherConfigurator(config: Config, prerequisites: DispatcherPrerequisites)
   extends MessageDispatcherConfigurator(config, prerequisites) {
 
-  private val threadPoolConfig: ThreadPoolConfig = configureExecutor() match {
-    case e: ThreadPoolExecutorConfigurator ⇒ e.threadPoolConfig
-    case other ⇒
-      prerequisites.eventStream.publish(
-        Warning(
-          "PinnedDispatcherConfigurator",
-          this.getClass,
-          "PinnedDispatcher [%s] not configured to use ThreadPoolExecutor, falling back to default config.".format(
-            config.getString("id"))))
-      ThreadPoolConfig()
-  }
+  private val excConfigurator = configureExecutor()
+
   /**
    * Creates new dispatcher for each invocation.
    */
-  override def dispatcher(): MessageDispatcher =
-    new PinnedDispatcher(
-      this, null, config.getString("id"),
-      config.getMillisDuration("shutdown-timeout"), threadPoolConfig)
+  override def dispatcher(): MessageDispatcher = {
+    excConfigurator match {
+      case poolConfig: AffinityPoolConfigurator ⇒
+        new PinnedAffinityDispatcher(
+          this, null, config.getString("id"),
+          config.getMillisDuration("shutdown-timeout"), poolConfig)
+
+      case other ⇒
+        val threadPoolConfig = other match {
+          case e: ThreadPoolExecutorConfigurator ⇒ e.threadPoolConfig
+          case _ ⇒
+            prerequisites.eventStream.publish(
+              Warning(
+                "PinnedDispatcherConfigurator",
+                this.getClass,
+                "PinnedDispatcher [%s] not configured to use ThreadPoolExecutor, falling back to default config.".format(
+                  config.getString("id"))))
+            ThreadPoolConfig()
+        }
+        new PinnedDispatcher(
+          this, null, config.getString("id"),
+          config.getMillisDuration("shutdown-timeout"), threadPoolConfig)
+    }
+
+  }
 
 }

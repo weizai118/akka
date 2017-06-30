@@ -62,8 +62,6 @@ private[akka] class AffinityPool(
 
   private def getQueueForRunnable(command: Runnable) = {
 
-    val runnableHash = command.hashCode()
-
     def sbhash(i: Int) = reverseBytes(i * 0x9e3775cd) * 0x9e3775cd
 
     def getNext = executionCounter.incrementAndGet() % parallelism
@@ -83,10 +81,12 @@ private[akka] class AffinityPool(
     }
 
     val workQueueIndex =
-      if (runnableToWorkerQueueIndex.get().size > fairDistributionThreshold)
-        Math.abs(sbhash(runnableHash)) % parallelism
+      if (parallelism == 1)
+        0
+      else if (runnableToWorkerQueueIndex.get().size > fairDistributionThreshold)
+        Math.abs(sbhash(command.hashCode)) % parallelism
       else
-        updateIfAbsentAndGetQueueIndex(runnableToWorkerQueueIndex, runnableHash, getNext)
+        updateIfAbsentAndGetQueueIndex(runnableToWorkerQueueIndex, command.hashCode, getNext)
 
     workQueues(workQueueIndex)
   }
