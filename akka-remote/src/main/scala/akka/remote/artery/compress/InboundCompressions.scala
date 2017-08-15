@@ -58,7 +58,7 @@ private[remote] final class InboundCompressionsImpl(
   // TODO would be nice if we can cleanup the tombstones
   // FIXME we should be able to remove the tombstones easily now
   private[this] val _actorRefsIns = new Long2ObjectHashMap[Option[InboundActorRefCompression]]()
-  private[this] val _inboundActorRefsLog = Logging(system, classOf[InboundManifestCompression])
+  private[this] val _inboundActorRefsLog = Logging(system, classOf[InboundActorRefCompression])
   private val createInboundActorRefsForOrigin = new LongFunction[Option[InboundActorRefCompression]] {
     override def apply(originUid: Long): Option[InboundActorRefCompression] = {
       val actorRefHitters = new TopHeavyHitters[ActorRef](settings.ActorRefs.Max)

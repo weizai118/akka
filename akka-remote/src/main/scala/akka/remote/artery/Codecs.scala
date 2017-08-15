@@ -66,8 +66,11 @@ private[remote] class Encoder(
 
       private val instruments: RemoteInstruments = RemoteInstruments(system)
 
+      private var changed = true
+
       private val changeActorRefCompressionCb = getAsyncCallback[(CompressionTable[ActorRef], Promise[Done])] {
         case (table, done) ⇒
+          changed = true
           headerBuilder.setOutboundActorRefCompression(table)
           done.success(Done)
       }
@@ -93,6 +96,7 @@ private[remote] class Encoder(
       }
 
       override def onPush(): Unit = {
+        if (changed) Thread.sleep(1)
         val outboundEnvelope = grab(in)
         val envelope = bufferPool.acquire()
 

@@ -38,9 +38,10 @@ object FanInThroughputSpec extends MultiNodeConfig {
 
   commonConfig(debugConfig(on = false).withFallback(
     ConfigFactory.parseString(s"""
+       akka.loglevel=DEBUG
        # for serious measurements you should increase the totalMessagesFactor (20)
-       akka.test.FanInThroughputSpec.totalMessagesFactor = 10.0
-       akka.test.FanInThroughputSpec.real-message = off
+       akka.test.FanInThroughputSpec.totalMessagesFactor = 40.0
+       akka.test.FanInThroughputSpec.real-message = on
        akka.test.FanInThroughputSpec.actor-selection = off
        akka.remote.artery.advanced {
          inbound-lanes = 4
@@ -99,27 +100,27 @@ abstract class FanInThroughputSpec extends RemotingMultiNodeSpec(FanInThroughput
   }
 
   val scenarios = List(
-    TestSettings(
-      testName = "warmup",
-      totalMessages = adjustedTotalMessages(20000),
-      burstSize = 1000,
-      payloadSize = 100,
-      senderReceiverPairs = senderReceiverPairs,
-      realMessage),
-    TestSettings(
-      testName = "size-100",
-      totalMessages = adjustedTotalMessages(50000),
-      burstSize = 1000,
-      payloadSize = 100,
-      senderReceiverPairs = senderReceiverPairs,
-      realMessage),
-    TestSettings(
-      testName = "size-1k",
-      totalMessages = adjustedTotalMessages(10000),
-      burstSize = 1000,
-      payloadSize = 1000,
-      senderReceiverPairs = senderReceiverPairs,
-      realMessage),
+    //    TestSettings(
+    //      testName = "warmup",
+    //      totalMessages = adjustedTotalMessages(20000),
+    //      burstSize = 1000,
+    //      payloadSize = 100,
+    //      senderReceiverPairs = senderReceiverPairs,
+    //      realMessage),
+    //    TestSettings(
+    //      testName = "size-100",
+    //      totalMessages = adjustedTotalMessages(50000),
+    //      burstSize = 1000,
+    //      payloadSize = 100,
+    //      senderReceiverPairs = senderReceiverPairs,
+    //      realMessage),
+    //    TestSettings(
+    //      testName = "size-1k",
+    //      totalMessages = adjustedTotalMessages(10000),
+    //      burstSize = 1000,
+    //      payloadSize = 1000,
+    //      senderReceiverPairs = senderReceiverPairs,
+    //      realMessage),
     TestSettings(
       testName = "size-10k",
       totalMessages = adjustedTotalMessages(2000),
