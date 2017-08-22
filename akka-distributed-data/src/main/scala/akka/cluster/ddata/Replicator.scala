@@ -1218,7 +1218,7 @@ final class Replicator(settings: ReplicatorSettings) extends Actor with ActorLog
 
   def receiveGet(key: KeyR, consistency: ReadConsistency, req: Option[Any]): Unit = {
     val localValue = getData(key.id)
-    log.debug("Received Get for key [{}]", key)
+    log.debug("Received Get for key [{}] => [{}]", key, localValue)
     if (isLocalGet(consistency)) {
       val reply = localValue match {
         case Some(DataEnvelope(DeletedData, _, _)) ⇒ DataDeleted(key, req)
@@ -1261,7 +1261,10 @@ final class Replicator(settings: ReplicatorSettings) extends Actor with ActorLog
         case Some(envelope @ DataEnvelope(existing, _, _)) ⇒
           modify(Some(existing)) match {
             case d: DeltaReplicatedData if deltaCrdtEnabled ⇒
-              (envelope.merge(d.resetDelta.asInstanceOf[existing.T]), deltaOrPlaceholder(d))
+              val x = d.resetDelta.asInstanceOf[existing.T]
+              val y = deltaOrPlaceholder(d)
+              log.debug("update existing [{}] => [{}] and delta [{}]", existing, x, y)
+              (envelope.merge(x), y)
             case d ⇒
               (envelope.merge(d.asInstanceOf[existing.T]), None)
           }
@@ -1354,6 +1357,7 @@ final class Replicator(settings: ReplicatorSettings) extends Actor with ActorLog
         try {
           // DataEnvelope will mergeDelta when needed
           val merged = envelope.merge(writeEnvelope).addSeen(selfAddress)
+          //log.debug("write existing [{}] writeEnvelope [{}] => merged [{}]]", existing, writeEnvelope, merged)
           Some(setData(key, merged))
         } catch {
           case e: IllegalArgumentException ⇒
@@ -1437,6 +1441,7 @@ final class Replicator(settings: ReplicatorSettings) extends Actor with ActorLog
       } else if (newEnvelope.data == DeletedData) DeletedDigest
       else LazyDigest
 
+    log.debug("setData [{}]", newEnvelope)
     dataEntries = dataEntries.updated(key, (newEnvelope, dig))
     if (newEnvelope.data == DeletedData)
       deltaPropagationSelector.delete(key)
@@ -1641,6 +1646,7 @@ final class Replicator(settings: ReplicatorSettings) extends Actor with ActorLog
     updatedData.foreach {
       case (key, envelope) ⇒
         val hadData = dataEntries.contains(key)
+        log.debug("write from gossip [{}], old [{}]", envelope, getData(key))
         writeAndStore(key, envelope, reply = false)
         if (sendBack) getData(key) match {
           case Some(d) ⇒

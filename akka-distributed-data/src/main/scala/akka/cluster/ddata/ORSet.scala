@@ -356,6 +356,9 @@ final class ORSet[A] private[akka] (
       case Some(d) ⇒ d.merge(rmOp)
     }
     assignAncestor(copy(elementsMap = elementsMap - element, delta = Some(newDelta)))
+    //
+    //    val newFullState = copy(elementsMap = elementsMap - element, delta = None)
+    //    assignAncestor(newFullState.copy(delta = Some(ORSet.FullStateDeltaOp(newFullState))))
   }
 
   /**
@@ -509,7 +512,7 @@ final class ORSet[A] private[akka] (
 
   // this class cannot be a `case class` because we need different `unapply`
 
-  override def toString: String = s"OR$elements"
+  override def toString: String = s"ORSet($elementsMap, $vvector)"
 
   override def equals(o: Any): Boolean = o match {
     case other: ORSet[_] ⇒ vvector == other.vvector && elementsMap == other.elementsMap
