@@ -99,9 +99,28 @@ object Recovery {
 
   /**
    * Convenience method for skipping recovery in [[PersistentActor]].
+   *
+   * It will still retrieve previously highest sequence number so that new events are persisted with
+   * higher sequence numbers rather than starting from 1 and assuming that there are no
+   * previous event with that sequence number.
+   *
    * @see [[Recovery]]
+   * @see [[Recovery#first]]
    */
   val none: Recovery = Recovery(toSequenceNr = 0L, fromSnapshot = SnapshotSelectionCriteria.None)
+
+  /**
+   * Optimized recovery in [[PersistentActor]] when it is known that it is started the very
+   * first time. It will completely skip the recovery process and the first persisted event
+   * will have sequence number 1.
+   *
+   * This must not be used if there might already be persisted events for this `persistenceId`,
+   * since sequence numbers must be unique and not be reused after deletion.
+   *
+   * @see [[Recovery]]
+   * @see [[Recovery#none]]
+   */
+  val first: Recovery = Recovery(toSequenceNr = -1, fromSnapshot = SnapshotSelectionCriteria.None)
 }
 
 final class RecoveryTimedOut(message: String) extends RuntimeException(message) with NoStackTrace
