@@ -34,11 +34,10 @@ trait SnapshotStore extends Actor with ActorLogging {
 
   final val receiveSnapshotStore: Actor.Receive = {
     case LoadSnapshot(persistenceId, criteria, toSequenceNr) ⇒
-      val criteriaWithLimit = criteria.limit(toSequenceNr)
-      if (criteriaWithLimit.maxSequenceNr <= 0L) {
+      if (criteria == SnapshotSelectionCriteria.None) {
         senderPersistentActor() ! LoadSnapshotResult(snapshot = None, toSequenceNr)
       } else {
-        breaker.withCircuitBreaker(loadAsync(persistenceId, criteriaWithLimit)) map {
+        breaker.withCircuitBreaker(loadAsync(persistenceId, criteria.limit(toSequenceNr))) map {
           sso ⇒ LoadSnapshotResult(sso, toSequenceNr)
         } recover {
           case e ⇒ LoadSnapshotFailed(e)
