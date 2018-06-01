@@ -1327,6 +1327,72 @@ private[stream] object Collect {
     }
 }
 
+/**
+ * INTERNAL API
+ */
+@InternalApi private[akka] final case class MapAsyncOne[In, Out](f: In ⇒ Future[Out])
+  extends GraphStage[FlowShape[In, Out]] {
+
+  private val in = Inlet[In]("MapAsyncOne.in")
+  private val out = Outlet[Out]("MapAsyncOne.out")
+
+  override def initialAttributes = DefaultAttributes.mapAsync
+
+  override val shape = FlowShape(in, out)
+
+  override def createLogic(inheritedAttributes: Attributes): GraphStageLogic =
+    new GraphStageLogic(shape) with InHandler with OutHandler {
+
+      val decider =
+        inheritedAttributes.mandatoryAttribute[SupervisionStrategy].decider
+
+      private var inFlight = false
+
+      def futureCompleted(result: Try[Out]): Unit = {
+        inFlight = false
+        result match {
+          case Success(elem) if elem != null ⇒
+            push(out, elem)
+          case other ⇒
+            val ex = other match {
+              case Failure(t)              ⇒ t
+              case Success(s) if s == null ⇒ ReactiveStreamsCompliance.elementMustNotBeNullException
+            }
+            if (decider(ex) == Supervision.Stop) failStage(ex)
+            else if (isClosed(in)) completeStage()
+            else pull(in)
+        }
+      }
+
+      private val futureCB = getAsyncCallback(futureCompleted)
+      private val invokeFutureCB: Try[Out] ⇒ Unit = futureCB.invoke
+
+      override def onPush(): Unit = {
+        try {
+          val future = f(grab(in))
+          inFlight = true
+          future.value match {
+            case None    ⇒ future.onComplete(invokeFutureCB)(akka.dispatch.ExecutionContexts.sameThreadExecutionContext)
+            case Some(v) ⇒ futureCompleted(v)
+          }
+        } catch {
+          case NonFatal(ex) ⇒ if (decider(ex) == Supervision.Stop) failStage(ex)
+        }
+      }
+
+      override def onUpstreamFinish(): Unit = {
+        if (!inFlight) completeStage()
+      }
+
+      override def onPull(): Unit = {
+        if (isClosed(in)) completeStage()
+        else pull(in)
+      }
+
+      setHandlers(in, out, this)
+    }
+}
+
 @InternalApi private[akka] final case class Watch[T](targetRef: ActorRef) extends SimpleLinearGraphStage[T] {
 
   override def initialAttributes = DefaultAttributes.watch
