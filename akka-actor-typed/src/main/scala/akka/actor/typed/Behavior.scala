@@ -107,9 +107,12 @@ object Behavior {
      * receive[String] { (ctx, msg) => println(msg); same }.widen[Number] {
      *   case b: BigDecimal => s"BigDecimal(&dollar;b)"
      *   case i: BigInteger => s"BigInteger(&dollar;i)"
-     *   // drop all other kinds of Number
+     *   // all other kinds of Number will be `unhandled`
      * }
      * }}}
+     *
+     * Scheduled messages via [[akka.actor.typed.scaladsl.TimerScheduler]] can currently
+     * not be used together with `widen`, see issue #25318.
      */
     def widen[U](matcher: PartialFunction[U, T]): Behavior[U] =
       BehaviorImpl.widened(behavior, matcher)
@@ -230,7 +233,23 @@ object Behavior {
    * that PostStop can be sent to previous behavior from `finishTerminate`.
    */
   private[akka] class StoppedBehavior[T](val postStop: OptionVal[Behavior[T]]) extends Behavior[T] {
-    override def toString = "Stopped"
+    validatePostStop(postStop)
+
+    @throws[IllegalArgumentException]
+    private final def validatePostStop(postStop: OptionVal[Behavior[T]]): Unit = {
+      postStop match {
+        case OptionVal.Some(b: DeferredBehavior[_]) ⇒
+          throw new IllegalArgumentException(s"Behavior used as `postStop` behavior in Stopped(...) was a deferred one [${b.toString}], which is not supported (it would never be evaluated).")
+        case _ ⇒ // all good
+      }
+    }
+
+    override def toString = "Stopped" + {
+      postStop match {
+        case OptionVal.Some(_) ⇒ "(postStop)"
+        case _                 ⇒ "()"
+      }
+    }
   }
 
   /**
@@ -320,8 +339,14 @@ object Behavior {
   /**
    * Execute the behavior with the given signal
    */
-  def interpretSignal[T](behavior: Behavior[T], ctx: ActorContext[T], signal: Signal): Behavior[T] =
-    interpret(behavior, ctx, signal)
+  def interpretSignal[T](behavior: Behavior[T], ctx: ActorContext[T], signal: Signal): Behavior[T] = {
+    val result = interpret(behavior, ctx, signal)
+    // we need to throw here to allow supervision of deathpact exception
+    signal match {
+      case Terminated(ref) if result == UnhandledBehavior ⇒ throw DeathPactException(ref)
+      case _ ⇒ result
+    }
+  }
 
   private def interpret[T](behavior: Behavior[T], ctx: ActorContext[T], msg: Any): Behavior[T] = {
     behavior match {

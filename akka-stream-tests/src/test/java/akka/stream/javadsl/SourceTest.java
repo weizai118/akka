@@ -8,10 +8,14 @@ import akka.Done;
 import akka.NotUsed;
 import akka.actor.ActorRef;
 import akka.actor.Cancellable;
+import akka.actor.Status;
 import akka.japi.Pair;
 import akka.japi.function.*;
 import akka.japi.pf.PFBuilder;
+//#imports
 import akka.stream.*;
+
+//#imports
 import akka.stream.scaladsl.FlowSpec;
 import akka.util.ConstantFun;
 import akka.stream.stage.*;
@@ -328,6 +332,22 @@ public class SourceTest extends StreamTest {
   }
 
   @Test
+  public void mustBeAbleToUseSingle() throws Exception {
+    //#source-single
+    CompletionStage<List<String>> future = Source.single("A").runWith(Sink.seq(), materializer);
+    CompletableFuture<List<String>> completableFuture = future.toCompletableFuture();
+    completableFuture.thenAccept(result -> System.out.printf("collected elements: %s\n", result));
+    // result list will contain exactly one element "A"
+
+    //#source-single
+    // DO NOT use get() directly in your production code!
+    List<String> result = completableFuture.get();
+    assertEquals(1, result.size());
+    assertEquals("A", result.get(0));
+
+  }
+
+  @Test
   public void mustBeAbleToUsePrefixAndTail() throws Exception {
     final TestKit probe = new TestKit(system);
     final Iterable<Integer> input = Arrays.asList(1, 2, 3, 4, 5, 6);
@@ -446,6 +466,7 @@ public class SourceTest extends StreamTest {
     probe.expectNoMessage(Duration.ofMillis(200));
     probe.expectMsgEquals("tick");
     probe.expectNoMessage(Duration.ofMillis(200));
+    cancellable.cancel();
   }
 
   @Test
@@ -547,6 +568,7 @@ public class SourceTest extends StreamTest {
     probe.expectMsgEquals(1);
     ref.tell(2, ActorRef.noSender());
     probe.expectMsgEquals(2);
+    ref.tell(new Status.Success("ok"), ActorRef.noSender());
   }
 
   @Test

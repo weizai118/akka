@@ -5,19 +5,21 @@
 package akka.actor.typed
 
 import java.io.IOException
-import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.{ AtomicBoolean, AtomicInteger }
 
-import akka.actor.ActorInitializationException
+import akka.actor.{ ActorInitializationException, typed }
 import akka.actor.typed.scaladsl.{ Behaviors, MutableBehavior }
 import akka.actor.typed.scaladsl.Behaviors._
-import akka.testkit.EventFilter
+import akka.testkit.{ ErrorFilter, EventFilter }
 import akka.actor.testkit.typed.scaladsl._
 import akka.actor.testkit.typed._
 import com.typesafe.config.ConfigFactory
 import org.scalatest.{ Matchers, WordSpec }
-
 import scala.concurrent.duration._
 import scala.util.control.NoStackTrace
+import scala.concurrent.duration._
+
+import akka.actor.typed.SupervisorStrategy.Resume
 
 object SupervisionSpec {
 
@@ -646,5 +648,135 @@ class SupervisionSpec extends ActorTestKit with TypedAkkaSpecWithShutdown {
       probe.expectMessage(Started)
     }
 
+    "replace supervision when new returned behavior catches same exception" in {
+      val probe = TestProbe[AnyRef]("probeMcProbeFace")
+      val behv = supervise[String](Behaviors.receiveMessage {
+        case "boom" ⇒ throw TE("boom indeed")
+        case "switch" ⇒
+          supervise[String](
+            supervise[String](
+              supervise[String](
+                supervise[String](
+                  supervise[String](
+                    Behaviors.receiveMessage {
+                      case "boom" ⇒ throw TE("boom indeed")
+                      case "ping" ⇒
+                        probe.ref ! "pong"
+                        Behaviors.same
+                      case "give me stacktrace" ⇒
+                        probe.ref ! new RuntimeException().getStackTrace.toVector
+                        Behaviors.stopped
+                    }).onFailure[RuntimeException](SupervisorStrategy.resume)
+                ).onFailure[RuntimeException](SupervisorStrategy.restartWithBackoff(1.second, 10.seconds, 23D))
+              ).onFailure[RuntimeException](SupervisorStrategy.restartWithLimit(23, 10.seconds))
+            ).onFailure[IllegalArgumentException](SupervisorStrategy.restart)
+          ).onFailure[RuntimeException](SupervisorStrategy.restart)
+      }).onFailure[RuntimeException](SupervisorStrategy.stop)
+
+      val actor = spawn(behv)
+      actor ! "switch"
+      actor ! "ping"
+      probe.expectMessage("pong")
+
+      EventFilter[RuntimeException](occurrences = 1).intercept {
+        // Should be supervised as resume
+        actor ! "boom"
+      }
+
+      actor ! "give me stacktrace"
+      val stacktrace = probe.expectMessageType[Vector[StackTraceElement]]
+      // supervisor receive is used for every supervision instance, only wrapped in one supervisor for RuntimeException
+      // and then the IllegalArgument one is kept since it has a different throwable
+      stacktrace.count(_.toString.startsWith("akka.actor.typed.internal.Supervisor.receive")) should ===(2)
+    }
+
+    "be able to recover from a DeathPactException" in {
+      val probe = TestProbe[AnyRef]()
+      val actor = spawn(Behaviors.supervise(Behaviors.setup[String] { ctx ⇒
+        val child = ctx.spawnAnonymous(Behaviors.receive[String] { (ctx, msg) ⇒
+          msg match {
+            case "boom" ⇒
+              probe.ref ! ctx.self
+              Behaviors.stopped
+          }
+        })
+        ctx.watch(child)
+
+        Behaviors.receiveMessage {
+          case "boom" ⇒
+            child ! "boom"
+            Behaviors.same
+          case "ping" ⇒
+            probe.ref ! "pong"
+            Behaviors.same
+        }
+      }).onFailure[DeathPactException](SupervisorStrategy.restart))
+
+      EventFilter[DeathPactException](occurrences = 1).intercept {
+        actor ! "boom"
+        val child = probe.expectMessageType[ActorRef[_]]
+        probe.expectTerminated(child, 3.seconds)
+      }
+      actor ! "ping"
+      probe.expectMessage("pong")
+    }
+
+  }
+
+  val allStrategies = Seq(
+    SupervisorStrategy.stop,
+    SupervisorStrategy.restart,
+    SupervisorStrategy.resume,
+    SupervisorStrategy.restartWithBackoff(1.millis, 100.millis, 2D),
+    SupervisorStrategy.restartWithLimit(1, 100.millis)
+  )
+
+  allStrategies.foreach { strategy ⇒
+
+    s"Supervision with the strategy $strategy" should {
+
+      "that is initially stopped should be stopped" in {
+        val actor = spawn(
+          Behaviors.supervise(Behaviors.stopped[Command])
+            .onFailure(strategy)
+        )
+        TestProbe().expectTerminated(actor, 3.second)
+      }
+
+      "that is stopped after setup should be stopped" in {
+        val actor = spawn(
+          Behaviors.supervise[Command](
+            Behaviors.setup(_ ⇒
+              Behaviors.stopped)
+          ).onFailure(strategy)
+        )
+        TestProbe().expectTerminated(actor, 3.second)
+      }
+
+      // this test doesn't make sense for Resume since there will be no second setup
+      if (!strategy.isInstanceOf[Resume]) {
+        "that is stopped after restart should be stopped" in {
+          val stopInSetup = new AtomicBoolean(false)
+          val actor = spawn(
+            Behaviors.supervise[String](
+              Behaviors.setup { _ ⇒
+                if (stopInSetup.get()) {
+                  Behaviors.stopped
+                } else {
+                  stopInSetup.set(true)
+                  Behaviors.receiveMessage {
+                    case "boom" ⇒ throw TE("boom")
+                  }
+                }
+              }).onFailure[TE](strategy)
+          )
+
+          EventFilter[TE](occurrences = 1).intercept {
+            actor ! "boom"
+          }
+          TestProbe().expectTerminated(actor, 3.second)
+        }
+      }
+    }
   }
 }

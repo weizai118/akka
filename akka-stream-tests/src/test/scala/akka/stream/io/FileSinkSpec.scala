@@ -16,6 +16,7 @@ import akka.stream.impl.StreamSupervisor.Children
 import akka.stream.scaladsl.{ FileIO, Sink, Source }
 import akka.stream.testkit._
 import akka.stream.testkit.Utils._
+import akka.stream.testkit.scaladsl.StreamTestKit._
 import akka.stream._
 import akka.util.ByteString
 import com.google.common.jimfs.{ Configuration, Jimfs }
@@ -233,7 +234,7 @@ class FileSinkSpec extends StreamSpec(UnboundedMailboxConfig) {
     }
   }
 
-  private def targetFile(block: Path ⇒ Unit, create: Boolean = true) {
+  private def targetFile(block: Path ⇒ Unit, create: Boolean = true): Unit = {
     val targetFile = Files.createTempFile(fs.getPath("/"), "synchronous-file-sink", ".tmp")
     if (!create) Files.delete(targetFile)
     try block(targetFile) finally Files.delete(targetFile)

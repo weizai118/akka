@@ -62,15 +62,14 @@ object MultiNode extends AutoPlugin {
         jvmOptions in MultiJvm := defaultMultiJvmOptions,
         compileInputs in (MultiJvm, compile) := ((compileInputs in (MultiJvm, compile)) dependsOn (ScalariformKeys.format in MultiJvm)).value,
         scalacOptions in MultiJvm := (scalacOptions in Test).value,
-        compile in MultiJvm := ((compile in MultiJvm) triggeredBy (compile in Test)).value,
         logLevel in multiJvmCreateLogger := Level.Debug, //  to see ssh establishment
         multiJvmCreateLogger in MultiJvm := { // to use normal sbt logging infra instead of custom sbt-multijvm-one
           val previous = (multiJvmCreateLogger in MultiJvm).value
           val logger = streams.value.log
           (name: String) =>
             new Logger {
-              def trace(t: => Throwable) { logger.trace(t) }
-              def success(message: => String) { success(message) }
+              def trace(t: => Throwable): Unit = { logger.trace(t) }
+              def success(message: => String): Unit = { success(message) }
               def log(level: Level.Value, message: => String): Unit =
                 logger.log(level, s"[${scala.Console.BLUE}$name${scala.Console.RESET}] $message")
             }
@@ -100,7 +99,10 @@ object MultiNode extends AutoPlugin {
      Def.settings((compile in MultiJvm) := {
       (headerCreate in MultiJvm).value
       (compile in MultiJvm).value
-    }) ++ headerSettings(MultiJvm)
+    }) ++ headerSettings(MultiJvm) ++ Seq(
+      // only works if I put it here ¯\_(ツ)_/¯
+      compile in MultiJvm := ((compile in MultiJvm).triggeredBy(compile in Test)).value
+    )
 
 
   implicit class TestResultOps(val self: TestResult) extends AnyVal {

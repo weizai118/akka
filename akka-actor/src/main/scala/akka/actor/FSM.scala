@@ -8,9 +8,11 @@ import language.implicitConversions
 import scala.concurrent.duration.Duration
 import scala.collection.mutable
 import akka.routing.{ Deafen, Listen, Listeners }
+
 import scala.concurrent.duration.FiniteDuration
 import scala.concurrent.duration._
 import akka.annotation.InternalApi
+import akka.util.JavaDurationConverters
 
 object FSM {
 
@@ -177,6 +179,18 @@ object FSM {
       case _                 ⇒ copy(timeout = None) // that means "cancel stateTimeout". This marker is needed
     } // so we do not have to break source/binary compat.
     // TODO: Can be removed once we can break State#timeout signature to `Option[Duration]`
+
+    /**
+     * JAVA API: Modify state transition descriptor to include a state timeout for the
+     * next state. This timeout overrides any default timeout set for the next
+     * state.
+     *
+     * Use Duration.Inf to deactivate an existing timeout.
+     */
+    def forMax(timeout: java.time.Duration): State[S, D] = {
+      import JavaDurationConverters._
+      forMax(timeout.asScala)
+    }
 
     /**
      * Send reply to sender of the current message, if available.
@@ -496,7 +510,7 @@ trait FSM[S, D] extends Actor with Listeners with ActorLogging {
   implicit final def total2pf(transitionHandler: (S, S) ⇒ Unit): TransitionHandler =
     new TransitionHandler {
       def isDefinedAt(in: (S, S)) = true
-      def apply(in: (S, S)) { transitionHandler(in._1, in._2) }
+      def apply(in: (S, S)): Unit = { transitionHandler(in._1, in._2) }
     }
 
   /**
@@ -608,7 +622,7 @@ trait FSM[S, D] extends Actor with Listeners with ActorLogging {
    * transition handling
    */
   private var transitionEvent: List[TransitionHandler] = Nil
-  private def handleTransition(prev: S, next: S) {
+  private def handleTransition(prev: S, next: S): Unit = {
     val tuple = (prev, next)
     for (te ← transitionEvent) { if (te.isDefinedAt(tuple)) te(tuple) }
   }
@@ -775,7 +789,7 @@ trait LoggingFSM[S, D] extends FSM[S, D] { this: Actor ⇒
   private var pos = 0
   private var full = false
 
-  private def advance() {
+  private def advance(): Unit = {
     val n = pos + 1
     if (n == logDepth) {
       full = true

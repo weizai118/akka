@@ -187,14 +187,14 @@ object ActorSystem {
    * then tries to walk the stack to find the callers class loader, then falls back to the ClassLoader
    * associated with the ActorSystem class.
    *
-   * @see <a href="http://typesafehub.github.io/config/v1.3.1/" target="_blank">The Typesafe Config Library API Documentation</a>
+   * @see <a href="https://lightbend.github.io/config/v1.3.1/" target="_blank">The Typesafe Config Library API Documentation</a>
    */
   def create(name: String, config: Config): ActorSystem = apply(name, config)
 
   /**
    * Creates a new ActorSystem with the specified name, the specified Config, and specified ClassLoader
    *
-   * @see <a href="http://typesafehub.github.io/config/v1.3.1/" target="_blank">The Typesafe Config Library API Documentation</a>
+   * @see <a href="https://lightbend.github.io/config/v1.3.1/" target="_blank">The Typesafe Config Library API Documentation</a>
    */
   def create(name: String, config: Config, classLoader: ClassLoader): ActorSystem = apply(name, config, classLoader)
 
@@ -211,7 +211,7 @@ object ActorSystem {
    * executor = "default-executor", including those that have not defined the executor setting and thereby fallback
    * to the default of "default-dispatcher.executor".
    *
-   * @see <a href="http://typesafehub.github.io/config/v1.3.1/" target="_blank">The Typesafe Config Library API Documentation</a>
+   * @see <a href="https://lightbend.github.io/config/v1.3.1/" target="_blank">The Typesafe Config Library API Documentation</a>
    */
   def create(name: String, config: Config, classLoader: ClassLoader, defaultExecutionContext: ExecutionContext): ActorSystem = apply(name, Option(config), Option(classLoader), Option(defaultExecutionContext))
 
@@ -259,14 +259,14 @@ object ActorSystem {
    * then tries to walk the stack to find the callers class loader, then falls back to the ClassLoader
    * associated with the ActorSystem class.
    *
-   * @see <a href="http://typesafehub.github.io/config/v1.3.1/" target="_blank">The Typesafe Config Library API Documentation</a>
+   * @see <a href="https://lightbend.github.io/config/v1.3.1/" target="_blank">The Typesafe Config Library API Documentation</a>
    */
   def apply(name: String, config: Config): ActorSystem = apply(name, Option(config), None, None)
 
   /**
    * Creates a new ActorSystem with the specified name, the specified Config, and specified ClassLoader
    *
-   * @see <a href="http://typesafehub.github.io/config/v1.3.1/" target="_blank">The Typesafe Config Library API Documentation</a>
+   * @see <a href="https://lightbend.github.io/config/v1.3.1/" target="_blank">The Typesafe Config Library API Documentation</a>
    */
   def apply(name: String, config: Config, classLoader: ClassLoader): ActorSystem = apply(name, Option(config), Option(classLoader), None)
 
@@ -279,7 +279,7 @@ object ActorSystem {
    * If no ExecutionContext is given, the system will fallback to the executor configured under "akka.actor.default-dispatcher.default-executor.fallback".
    * The system will use the passed in config, or falls back to the default reference configuration using the ClassLoader.
    *
-   * @see <a href="http://typesafehub.github.io/config/v1.3.1/" target="_blank">The Typesafe Config Library API Documentation</a>
+   * @see <a href="https://lightbend.github.io/config/v1.3.1/" target="_blank">The Typesafe Config Library API Documentation</a>
    */
   def apply(
     name:                    String,
@@ -293,7 +293,7 @@ object ActorSystem {
    *
    * For more detailed information about the different possible configuration options, look in the Akka Documentation under "Configuration"
    *
-   * @see <a href="http://typesafehub.github.io/config/v1.3.1/" target="_blank">The Typesafe Config Library API Documentation</a>
+   * @see <a href="https://lightbend.github.io/config/v1.3.1/" target="_blank">The Typesafe Config Library API Documentation</a>
    */
   class Settings(classLoader: ClassLoader, cfg: Config, final val name: String, val setup: ActorSystemSetup) {
 
@@ -302,7 +302,7 @@ object ActorSystem {
     /**
      * The backing Config of this ActorSystem's Settings
      *
-     * @see <a href="http://typesafehub.github.io/config/v1.3.1/" target="_blank">The Typesafe Config Library API Documentation</a>
+     * @see <a href="https://lightbend.github.io/config/v1.3.1/" target="_blank">The Typesafe Config Library API Documentation</a>
      */
     final val config: Config = {
       val config = cfg.withFallback(ConfigFactory.defaultReference(classLoader))
@@ -487,6 +487,12 @@ abstract class ActorSystem extends ActorRefFactory {
   //#scheduler
 
   /**
+   * Java API: Light-weight scheduler for running asynchronous tasks after some deadline
+   * in the future. Not terribly precise but cheap.
+   */
+  def getScheduler: Scheduler = scheduler
+
+  /**
    * Helper object for looking up configured dispatchers.
    */
   def dispatchers: Dispatchers
@@ -498,6 +504,14 @@ abstract class ActorSystem extends ActorRefFactory {
    * Importing this member will place the default MessageDispatcher in scope.
    */
   implicit def dispatcher: ExecutionContextExecutor
+
+  /**
+   * Java API: Default dispatcher as configured. This dispatcher is used for all actors
+   * in the actor system which do not have a different dispatcher configured
+   * explicitly.
+   * Importing this member will place the default MessageDispatcher in scope.
+   */
+  def getDispatcher: ExecutionContextExecutor = dispatcher
 
   /**
    * Helper object for looking up configured mailbox types.
@@ -840,8 +854,8 @@ private[akka] class ActorSystemImpl(
   }
 
   def start(): this.type = _start
-  def registerOnTermination[T](code: ⇒ T) { registerOnTermination(new Runnable { def run = code }) }
-  def registerOnTermination(code: Runnable) { terminationCallbacks.add(code) }
+  def registerOnTermination[T](code: ⇒ T): Unit = { registerOnTermination(new Runnable { def run = code }) }
+  def registerOnTermination(code: Runnable): Unit = { terminationCallbacks.add(code) }
 
   override def terminate(): Future[Terminated] = {
     if (!settings.LogDeadLettersDuringShutdown) logDeadLetterListener foreach stop
@@ -936,7 +950,7 @@ private[akka] class ActorSystemImpl(
 
   def hasExtension(ext: ExtensionId[_ <: Extension]): Boolean = findExtension(ext) != null
 
-  private def loadExtensions() {
+  private def loadExtensions(): Unit = {
     /**
      * @param throwOnLoadFail Throw exception when an extension fails to load (needed for backwards compatibility)
      */

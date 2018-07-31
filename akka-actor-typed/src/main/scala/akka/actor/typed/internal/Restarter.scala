@@ -11,8 +11,9 @@ import akka.actor.DeadLetterSuppression
 import akka.actor.typed.SupervisorStrategy._
 import akka.actor.typed.scaladsl.Behaviors
 import akka.annotation.InternalApi
-import akka.util.OptionVal
+import akka.util.{ OptionVal, PrettyDuration }
 
+import scala.annotation.tailrec
 import scala.concurrent.duration.{ Deadline, FiniteDuration }
 import scala.reflect.ClassTag
 import scala.util.control.Exception.Catcher
@@ -44,6 +45,37 @@ import scala.util.control.NonFatal
       supervisor.init(ctx)
     }
 
+  // find supervision that is superflous by having the same exception handled closer to the behavior
+  // and remove those instances. Needs to be called in the wrap method of all supervisor classes
+  def deduplicate[T, Thr <: Throwable: ClassTag](supervisor: Supervisor[T, Thr]): Supervisor[T, Thr] = {
+
+    // side effecting to avoid allocating a tuple per loop
+    var seenSupervised = Set.empty[Class[_]]
+
+    // can't be tailrec, but should be ok since hierarchies shouldn't be _that_ deep given that they
+    // are deduplicated for every wrap
+    def loop(behavior: Behavior[T]): Behavior[T] = {
+      behavior match {
+        case s: Supervisor[T, _] ⇒
+          val inner = loop(s.behavior)
+          if (seenSupervised.contains(s.throwableClass))
+            // the exception this supervision cover is already covered closer to
+            // the actual behavior so s will never be invoked, lets' remove it
+            inner
+          else {
+            seenSupervised += s.throwableClass
+            if (inner eq s.behavior) s
+            else s.wrap(inner, false)
+          }
+        case b ⇒ b
+      }
+    }
+
+    // we know that the result is either the original outermost or another outermost supervision
+    // but the type system doesn't
+    loop(supervisor).asInstanceOf[Supervisor[T, Thr]]
+  }
+
 }
 
 /**
@@ -51,15 +83,20 @@ import scala.util.control.NonFatal
  */
 @InternalApi private[akka] abstract class Supervisor[T, Thr <: Throwable: ClassTag] extends ExtensibleBehavior[T] {
 
+  private[akka] def throwableClass = implicitly[ClassTag[Thr]].runtimeClass
+
   protected def loggingEnabled: Boolean
 
   /**
    * Invoked when the actor is created (or re-created on restart) this is where a restarter implementation
    * can provide logic for dealing with exceptions thrown when running any actor initialization logic (undeferring).
    *
+   * Note that the logic must take care to not wrap StoppedBehavior to avoid creating zombie behaviors that keep
+   * running although stopped.
+   *
    * @return The initial behavior of the actor after undeferring if needed
    */
-  def init(ctx: ActorContext[T]): Supervisor[T, Thr]
+  def init(ctx: ActorContext[T]): Behavior[T]
 
   /**
    * Current behavior
@@ -73,7 +110,7 @@ import scala.util.control.NonFatal
 
   protected def handleException(ctx: ActorContext[T], startedBehavior: Behavior[T]): Catcher[Behavior[T]]
 
-  protected def restart(ctx: ActorContext[T], initialBehavior: Behavior[T], startedBehavior: Behavior[T]): Supervisor[T, Thr] = {
+  protected def restart(ctx: ActorContext[T], initialBehavior: Behavior[T], startedBehavior: Behavior[T]): Behavior[T] = {
     try Behavior.interpretSignal(startedBehavior, ctx, PreRestart) catch {
       case NonFatal(ex) ⇒ ctx.asScala.log.error(ex, "failure during PreRestart")
     }
@@ -99,7 +136,7 @@ import scala.util.control.NonFatal
 
   protected def log(ctx: ActorContext[T], ex: Thr): Unit = {
     if (loggingEnabled)
-      ctx.asScala.log.error(ex, ex.getMessage)
+      ctx.asScala.log.error(ex, "Supervisor [{}] saw failure: {}", this, ex.getMessage)
   }
 }
 
@@ -109,9 +146,12 @@ import scala.util.control.NonFatal
 @InternalApi private[akka] final class Resumer[T, Thr <: Throwable: ClassTag](
   override val behavior: Behavior[T], override val loggingEnabled: Boolean) extends Supervisor[T, Thr] {
 
-  def init(ctx: ActorContext[T]) =
+  def init(ctx: ActorContext[T]) = {
     // no handling of errors for Resume as that could lead to infinite restart-loop
-    wrap(Behavior.validateAsInitial(Behavior.start(behavior, ctx)), afterException = false)
+    val started = Behavior.validateAsInitial(Behavior.start(behavior, ctx))
+    if (Behavior.isAlive(started)) wrap(started, afterException = false)
+    else started
+  }
 
   override def handleException(ctx: ActorContext[T], startedBehavior: Behavior[T]): Catcher[Supervisor[T, Thr]] = {
     case NonFatal(ex: Thr) ⇒
@@ -120,8 +160,9 @@ import scala.util.control.NonFatal
   }
 
   override protected def wrap(nextBehavior: Behavior[T], afterException: Boolean): Supervisor[T, Thr] =
-    new Resumer[T, Thr](nextBehavior, loggingEnabled)
+    Supervisor.deduplicate(new Resumer[T, Thr](nextBehavior, loggingEnabled))
 
+  override def toString = "resume"
 }
 
 /**
@@ -130,8 +171,17 @@ import scala.util.control.NonFatal
 @InternalApi private[akka] final class Stopper[T, Thr <: Throwable: ClassTag](
   override val behavior: Behavior[T], override val loggingEnabled: Boolean) extends Supervisor[T, Thr] {
 
-  def init(ctx: ActorContext[T]): Supervisor[T, Thr] =
-    wrap(Behavior.validateAsInitial(Behavior.start(behavior, ctx)), false)
+  def init(ctx: ActorContext[T]): Behavior[T] = {
+    try {
+      val started = Behavior.validateAsInitial(Behavior.start(behavior, ctx))
+      if (Behavior.isAlive(started)) wrap(started, false)
+      else started
+    } catch {
+      case NonFatal(ex: Thr) ⇒
+        log(ctx, ex)
+        Behavior.stopped
+    }
+  }
 
   override def handleException(ctx: ActorContext[T], startedBehavior: Behavior[T]): Catcher[Behavior[T]] = {
     case NonFatal(ex: Thr) ⇒
@@ -140,7 +190,9 @@ import scala.util.control.NonFatal
   }
 
   override protected def wrap(nextBehavior: Behavior[T], afterException: Boolean): Supervisor[T, Thr] =
-    new Stopper[T, Thr](nextBehavior, loggingEnabled)
+    Supervisor.deduplicate(new Stopper[T, Thr](nextBehavior, loggingEnabled))
+
+  override def toString = "stop"
 
 }
 
@@ -151,18 +203,23 @@ import scala.util.control.NonFatal
   initialBehavior: Behavior[T], override val behavior: Behavior[T],
   override val loggingEnabled: Boolean) extends Supervisor[T, Thr] {
 
-  override def init(ctx: ActorContext[T]) =
+  override def init(ctx: ActorContext[T]) = {
     // no handling of errors for Restart as that could lead to infinite restart-loop
-    wrap(Behavior.validateAsInitial(Behavior.start(behavior, ctx)), afterException = false)
+    val started = Behavior.validateAsInitial(Behavior.start(behavior, ctx))
+    if (Behavior.isAlive(started)) wrap(started, afterException = false)
+    else started
+  }
 
-  override def handleException(ctx: ActorContext[T], startedBehavior: Behavior[T]): Catcher[Supervisor[T, Thr]] = {
+  override def handleException(ctx: ActorContext[T], startedBehavior: Behavior[T]): Catcher[Behavior[T]] = {
     case NonFatal(ex: Thr) ⇒
       log(ctx, ex)
       restart(ctx, initialBehavior, startedBehavior)
   }
 
   override protected def wrap(nextBehavior: Behavior[T], afterException: Boolean): Supervisor[T, Thr] =
-    new Restarter[T, Thr](initialBehavior, nextBehavior, loggingEnabled)
+    Supervisor.deduplicate(new Restarter[T, Thr](initialBehavior, nextBehavior, loggingEnabled))
+
+  override def toString = "restart"
 }
 
 /**
@@ -176,7 +233,9 @@ import scala.util.control.NonFatal
 
   override def init(ctx: ActorContext[T]) =
     try {
-      wrap(Behavior.validateAsInitial(Behavior.start(behavior, ctx)), afterException = false)
+      val started = Behavior.validateAsInitial(Behavior.start(behavior, ctx))
+      if (Behavior.isAlive(started)) wrap(started, afterException = false)
+      else started
     } catch {
       case NonFatal(ex: Thr) ⇒
         log(ctx, ex)
@@ -190,7 +249,7 @@ import scala.util.control.NonFatal
     case OptionVal.Some(d) ⇒ d.hasTimeLeft
   }
 
-  override def handleException(ctx: ActorContext[T], startedBehavior: Behavior[T]): Catcher[Supervisor[T, Thr]] = {
+  override def handleException(ctx: ActorContext[T], startedBehavior: Behavior[T]): Catcher[Behavior[T]] = {
     case NonFatal(ex: Thr) ⇒
       log(ctx, ex)
       if (deadlineHasTimeLeft && retries >= strategy.maxNrOfRetries)
@@ -200,14 +259,18 @@ import scala.util.control.NonFatal
   }
 
   override protected def wrap(nextBehavior: Behavior[T], afterException: Boolean): Supervisor[T, Thr] = {
-    if (afterException) {
+    val restarter = if (afterException) {
       val timeLeft = deadlineHasTimeLeft
       val newRetries = if (timeLeft) retries + 1 else 1
       val newDeadline = if (deadline.isDefined && timeLeft) deadline else OptionVal.Some(Deadline.now + strategy.withinTimeRange)
       new LimitedRestarter[T, Thr](initialBehavior, nextBehavior, strategy, newRetries, newDeadline)
     } else
       new LimitedRestarter[T, Thr](initialBehavior, nextBehavior, strategy, retries, deadline)
+
+    Supervisor.deduplicate(restarter)
   }
+
+  override def toString = s"restartWithLimit(${strategy.maxNrOfRetries}, ${PrettyDuration.format(strategy.withinTimeRange)})"
 }
 
 /**
@@ -249,10 +312,11 @@ import scala.util.control.NonFatal
 
   override def loggingEnabled: Boolean = strategy.loggingEnabled
 
-  def init(ctx: ActorContext[Any]): Supervisor[Any, Thr] =
+  def init(ctx: ActorContext[Any]) =
     try {
-      val startedBehavior = Behavior.validateAsInitial(Behavior.start(initialBehavior, ctx))
-      new BackoffRestarter(initialBehavior, startedBehavior, strategy, restartCount, blackhole)
+      val started = Behavior.validateAsInitial(Behavior.start(initialBehavior, ctx))
+      if (Behavior.isAlive(started)) new BackoffRestarter(initialBehavior, started, strategy, restartCount, blackhole)
+      else started
     } catch {
       case NonFatal(ex: Thr) ⇒
         log(ctx, ex)
@@ -308,7 +372,9 @@ import scala.util.control.NonFatal
     if (afterException)
       throw new IllegalStateException("wrap not expected afterException in BackoffRestarter")
     else
-      new BackoffRestarter[T, Thr](initialBehavior, nextBehavior, strategy, restartCount, blackhole)
+      Supervisor.deduplicate(new BackoffRestarter[T, Thr](initialBehavior, nextBehavior, strategy, restartCount, blackhole))
   }
+
+  override def toString = s"restartWithBackoff(${PrettyDuration.format(strategy.minBackoff)}, ${PrettyDuration.format(strategy.maxBackoff)}, ${strategy.randomFactor})"
 }
 
